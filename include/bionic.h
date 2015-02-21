@@ -9,11 +9,12 @@ char * _strpbrk(const char *s1, const char *s2);
 char *_strtok(char *str, const char *delim, char **saveptr);
 int _strcasecmp(const char *s1, const char *s2);
 void *_memcpy(void *dst0, const void *src0, size_t length);
-void _memset(void *dst0, char val, size_t length);
-unsigned long _strtoul(const void *nptr, void **endptr, int base);
+void *memset(void *__s, int __c, size_t __n);
+unsigned long strtoul(const char *nptr, char **endptr, unsigned int base);
 int _strlen(const char *s);
 int _strnlen(const char *s, uint32_t maxlen);
-
+void _usleep(uint32_t usecs);
+void _msleep(uint32_t msecs);
 
 /* ctype replacements */
 int _isspace(char c);

@@ -1,7 +1,7 @@
 #include <stdint.h>
 #include "serial.h"
+#include "memio.h"
 
-#define PUTS_HANDLE_NEWLINE
 #define SERIAL_USB
 
 #ifdef SERIAL_UART
@@ -96,7 +96,8 @@ static void uart_setreg(int regnum, uint8_t val)
 int serial_putc(uint8_t c)
 {
 	/* Wait for UART to be empty */
-	while (! (uart_getreg(UART_LSR) & 0x20));
+	while (! (uart_getreg(UART_LSR) & 0x20))
+		asm("");
 
 	uart_setreg(UART_RBR, c);
 	return 0;
@@ -104,7 +105,8 @@ int serial_putc(uint8_t c)
 
 uint8_t serial_getc(void)
 {
-	while (! (uart_getreg(UART_LSR) & 0x01));
+	while (! (uart_getreg(UART_LSR) & 0x01))
+		asm("");
 	return uart_getreg(UART_RBR);
 }
 
@@ -117,6 +119,12 @@ int serial_puts(const void *s)
 		serial_putc(*str++);
 	}
 	return 0;
+}
+
+int serial_read(void *data, int bytes)
+{
+	while (--bytes)
+		((uint8_t *)data++) = serial_getc();
 }
 
 void serial_init(void)
@@ -147,45 +155,144 @@ void serial_init(void)
 }
 #else /* SERIAL_USB */
 
-static void (*rom_usb_read)(void *data, int bytes, int timeout) = (void *)0xfff03639;
-static void (*rom_usb_write)(const void *data, int bytes, int timeout) = (void *)0xfff03653;
-static void (*rom_usb_flush)(void) = (void *)0xfff04845;
+#include "fernvale-usb.h"
+
+static volatile uint8_t *recv_bfr = (uint8_t *)0x70000000;
+static int recv_size = 0;
+static int recv_offset = 0;
+
+#pragma GCC optimize ("-O1")
+
+static void usb_receive_wait(uint8_t endpoint_number)
+{
+	/* Wait for data to exist, ignoring other USB IRQs */
+	while (!readb(USB_CTRL_INTROUT))
+		(void)readb(USB_CTRL_INTRUSB);
+
+	/* Select EP1 */
+	writeb(endpoint_number, USB_CTRL_INDEX);
+
+	/* Set endpoint to OUT */
+	writeb(readb(USB_CTRL_EP_INCSR2) & ~USB_CTRL_EP_INCSR2_MODE,
+			USB_CTRL_EP_INCSR2);
+
+	while (!readb(USB_CTRL_EP_OUTCSR1 & USB_CTRL_EP_OUTCSR1_RXPKTRDY))
+		asm("");
+		
+	recv_size  = (readb(USB_CTRL_EP_COUNT1) << 0) & 0x00ff;
+	recv_size |= (readb(USB_CTRL_EP_COUNT2) << 8) & 0xff00;
+
+	for (recv_offset = 0; recv_offset < recv_size; recv_offset++)
+		recv_bfr[recv_offset] = readb(USB_CTRL_EP1_FIFO_DB0);
+	recv_offset = 0;
+
+	/* Clear FIFO (write 0 to RXPKTRDY) */
+	writeb(0, USB_CTRL_EP_OUTCSR1);
+}
+
+static void usb_handle_irqs(void)
+{
+	/* Ignore general-purpose IRQs */
+	(void)readb(USB_CTRL_INTRUSB);
+
+	/* Select EP1 */
+	writeb(1, USB_CTRL_INDEX);
+
+	/* Flush the output FIFO if there is data present */
+	if (readb(USB_CTRL_EP_INCSR1) & USB_CTRL_EP_INCSR1_FIFONOTEMPTY) {
+		writeb(readb(USB_CTRL_EP_INCSR2) | USB_CTRL_EP_INCSR2_MODE,
+			USB_CTRL_EP_INCSR2);
+		writeb(USB_CTRL_EP_INCSR1_INPKTRDY, USB_CTRL_EP_INCSR1);
+	}
+
+	/* Set endpoint to OUT */
+	writeb(readb(USB_CTRL_EP_INCSR2) & ~USB_CTRL_EP_INCSR2_MODE,
+			USB_CTRL_EP_INCSR2);
+
+	/* If there are incoming bytes, read them into the buffer */
+	if (readb(USB_CTRL_EP_OUTCSR1 & USB_CTRL_EP_OUTCSR1_RXPKTRDY))
+		usb_receive_wait(1);
+
+	/* Set endpoint to IN mode */
+	writeb(readb(USB_CTRL_EP_INCSR2) | USB_CTRL_EP_INCSR2_MODE,
+			USB_CTRL_EP_INCSR2);
+}
 
 int serial_putc(uint8_t c)
 {
+	/* Fix up linefeeds */
 	if (c == '\n')
 		serial_putc('\r');
-	rom_usb_write(&c, 1, -1);
-	rom_usb_flush();
+
+	/* Wait for the bus to be idle, so we don't double-xmit */
+	while (readb(USB_CTRL_INTRIN))
+		asm("");
+
+	/* Select EP1 */
+	writeb(1, USB_CTRL_INDEX);
+
+	/* Add the character to the FIFO */
+	writeb(c, USB_CTRL_EP1_FIFO_DB0);
+	writeb(USB_CTRL_EP_INCSR1_INPKTRDY, USB_CTRL_EP_INCSR1);
+
+	/* Wait for the character to transmit, so we don't double-xmit */
+	while (!readb(USB_CTRL_INTRIN))
+		asm("");
+
 	return 0;
 }
 
 uint8_t serial_getc(void)
 {
-	uint8_t bfr;
-	rom_usb_read(&bfr, 1, -1);
-	return bfr;
+	/* Wait for data if the buffer is empty */
+	while (recv_offset == recv_size)
+		usb_handle_irqs();
+
+	return recv_bfr[recv_offset++];
 }
 
 int serial_puts(const void *s)
 {
-#ifdef PUTS_HANDLE_NEWLINE
 	const char *str = s;
 	while(*str) {
-		if (*str == '\n')
-			serial_putc('\r');
 		serial_putc(*str++);
 	}
-#else
-	uint32_t len = _strlen(s);
-	rom_usb_write(s, len, -1);
-	rom_usb_flush();
-#endif
+	return 0;
+}
+
+int serial_read(void *data, int bytes)
+{
+	while (--bytes) {
+		*((uint8_t *)data) = serial_getc();
+		data++;
+	}
+
 	return 0;
 }
 
 void serial_init(void)
 {
+	(void)readb(USB_CTRL_INTROUT);
+	(void)readb(USB_CTRL_INTRIN);
+	(void)readb(USB_CTRL_INTRUSB);
+
+	writeb(USB_CTRL_INTROUTE_EP1_OUT_ENABLE, USB_CTRL_INTROUTE);
+	writeb(USB_CTRL_INTRINE_EP1_IN_ENABLE, USB_CTRL_INTRINE);
+
+	/* Perform a receive, to drain the buffer */
+	recv_size = readb(USB_CTRL_EP_COUNT1) & 0xff;
+	recv_size |= (readb(USB_CTRL_EP_COUNT2) << 8) & 0xff00;
+	for (recv_offset = 0; recv_offset < recv_size; recv_offset++)
+		recv_bfr[recv_offset] = readb(USB_CTRL_EP1_FIFO_DB0);
+
+	/* Clear FIFO */
+	writeb(0, USB_CTRL_EP_OUTCSR1);
+
+	/* Wait for an event to happen */
+	writeb(1, USB_CTRL_INDEX);
+
+	recv_offset = 0;
+	recv_size = 0;
 }
 
-#endif /* UART */
+#endif /* !SERIAL_UART */

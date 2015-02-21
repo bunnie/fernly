@@ -43,12 +43,14 @@ MKDIR = mkdir
 SED = sed
 PYTHON = python
 
-AS = $(CROSS_COMPILE)as
-CC = $(CROSS_COMPILE)clang
+AS = $(CROSS_COMPILE)gcc $(CFLAGS) -D__ASSEMBLY__
+CC = $(CROSS_COMPILE)gcc
 LD = $(CROSS_COMPILE)ld
 OBJCOPY = $(CROSS_COMPILE)objcopy
 SIZE = $(CROSS_COMPILE)size
 STRIP = $(CROSS_COMPILE)strip
+
+CC_NATIVE ?= gcc
 
 all:
 .PHONY: all

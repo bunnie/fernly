@@ -2,8 +2,8 @@ include mkenv.mk
 include magic.mk
 
 CFLAGS = -march=armv5te -mfloat-abi=soft -Wall \
-	 -Os -ggdb -Iinclude
-AFLAGS = -D__ASSEMBLY__
+	 -Os -ggdb -Iinclude -marm
+AFLAGS = 
 
 LDFLAGS = --nostdlib -T fernvale.ld
 LIBS =
@@ -17,10 +17,12 @@ SRC_C = \
 	cmd-sleep.c \
 	cmd-spi.c \
 	cmd-led.c \
+	cmd-load.c \
 	cmd-bl.c \
 	cmd-lcd.c \
 	emi.c \
 	irq.c \
+	lcd.c \
 	main.c \
 	scriptic.c \
 	serial.c \
@@ -34,6 +36,7 @@ SRC_S = \
 	scriptic/enable-psram.S \
 	scriptic/spi.S \
 	scriptic/spi-blockmode.S \
+	_lshrdi3.S \
 	_udivsi3.S \
 	_divsi3.S \
 	start.S
@@ -41,27 +44,20 @@ SRC_S = \
 OBJ = $(addprefix $(BUILD)/, $(SRC_S:.S=.o) $(SRC_C:.c=.o))
 
 all: $(BUILD)/firmware.bin \
-	$(BUILD)/loader.bin \
 	$(BUILD)/usb-loader.bin \
-	$(BUILD)/fernly-loader
+	$(BUILD)/fernly-usb-loader
 clean:
 	$(RM) -rf $(BUILD)
 
-$(BUILD)/fernly-loader: fernly-loader.c
-	$(CC) fernly-loader.c -o $@
-
-$(BUILD)/loader.bin: $(BUILD)/loader.o
-	objcopy -S -O binary $(BUILD)/loader.o $@
+$(BUILD)/fernly-usb-loader: fernly-usb-loader.c sha1.c sha1.h
+	$(CC_NATIVE) fernly-usb-loader.c sha1.c -o $@
 
 $(BUILD)/usb-loader.bin: $(BUILD)/usb-loader.o
-	objcopy -S -O binary $(BUILD)/usb-loader.o $@
-
-$(BUILD)/loader.o: loader.S
-	as loader.S -o $@
+	$(OBJCOPY) -S -O binary $(BUILD)/usb-loader.o $@
 
 HEADER_BUILD = $(BUILD)/genhdr
 $(BUILD)/firmware.bin: $(BUILD)/firmware.elf
-	objcopy -S -O binary $(BUILD)/firmware.elf $@
+	$(OBJCOPY) -S -O binary $(BUILD)/firmware.elf $@
 
 $(BUILD)/firmware.elf: $(OBJ)
 	$(LD) $(LDFLAGS) --entry=reset_handler -o $@ $(OBJ) $(LIBS)
@@ -76,3 +72,7 @@ $(OBJ_DIRS):
 $(HEADER_BUILD):
 	$(MKDIR) -p $@ build/scriptic
 -include $(OBJ:.o=.P)
+
+test:
+	novena-usb-hub -d u1 ; sleep 1; novena-usb-hub -e u1 ; sleep 2
+	./build/fernly-usb-loader /dev/fernvale ./build/usb-loader.bin ./build/firmware.bin

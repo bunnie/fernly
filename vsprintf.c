@@ -12,8 +12,8 @@
  */
 
 #include <stdarg.h>
-#include <linux/types.h>
-#include <linux/string.h>
+#include <sys/types.h>
+#include <sys/string.h>
 #include <errno.h>
 #include <stdint.h>
 #include "bionic.h"
@@ -85,6 +85,11 @@ int strict_strtoul(const char *cp, unsigned int base, unsigned long *res)
 	}
 
 	return -EINVAL;
+}
+
+unsigned long strtoul(const char *cp, char **endp, unsigned int base)
+{
+	return simple_strtoul(cp, endp, base);
 }
 
 long simple_strtol(const char *cp,char **endp,unsigned int base)
@@ -661,7 +666,7 @@ static int vsnprintf_internal(char *buf, size_t size, const char *fmt,
 		} else if (qualifier == 'Z' || qualifier == 'z') {
 			num = va_arg(args, size_t);
 		} else if (qualifier == 't') {
-			num = va_arg(args, ptrdiff_t);
+			num = (unsigned long) va_arg(args, void *);
 		} else if (qualifier == 'h') {
 			num = (unsigned short) va_arg(args, int);
 			if (flags & SIGN)

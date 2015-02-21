@@ -72,6 +72,7 @@ static int serial_get_line(char *bfr, int len)
                        /* Next two characters are escape codes */
                        uint8_t next = serial_getc();
                        /* Sanity check: next should be '[' */
+		       (void)next;
 
                        next = serial_getc();
                }
@@ -182,8 +183,11 @@ static int list_registers(void)
 	return 0;
 }
 
+static int shell_run_command(char *line);
 static int do_init(void)
 {
+	serial_init();
+
 	list_registers();
 
 	/* Disable system watchdog */
@@ -199,10 +203,14 @@ static int do_init(void)
 	scriptic_run("enable_psram");
 
 	serial_puts("\n\nFernly shell\n");
+	shell_run_command("bl 5");
+	shell_run_command("lcd init");
+	shell_run_command("lcd tpd");
 
 	return 0;
 }
 
+#ifdef AUTOMATED
 static inline int get_hex(int bytes)
 {
 	uint32_t word = 0;
@@ -231,7 +239,6 @@ static inline int get_hex(int bytes)
 	return word;
 }
 
-#ifdef AUTOMATED
 /* Protocol:
  * Stream is byte-oriented.  The following commands are known:
  *
@@ -337,11 +344,14 @@ extern int cmd_msleep(int argc, char **argv);
 extern int cmd_peek(int argc, char **argv);
 extern int cmd_poke(int argc, char **argv);
 extern int cmd_spi(int argc, char **argv);
+extern int cmd_spi_raw(int argc, char **argv);
 extern int cmd_swi(int argc, char **argv);
 extern int cmd_reboot(int argc, char **argv);
 extern int cmd_led(int argc, char **argv);
 extern int cmd_bl(int argc, char **argv);
 extern int cmd_lcd(int argc, char **argv);
+extern int cmd_load(int argc, char **argv);
+extern int cmd_loadjump(int argc, char **argv);
 
 static const struct {
 	int (*func)(int argc, char **argv);
@@ -389,6 +399,11 @@ static const struct {
 		.help = "Manipulate on-board SPI",
 	},
 	{
+		.func = cmd_spi_raw,
+		.name = "spi_raw",
+		.help = "Manipulate on-board SPI (raw interface)",
+	},
+	{
 		.func = cmd_swi,
 		.name = "swi",
 		.help = "Generate software interrupt",
@@ -408,6 +423,17 @@ static const struct {
 		.name = "lcd",
 		.help = "Manipulate the LCD",
 	},
+	{
+		.func = cmd_load,
+		.name = "load",
+		.help = "Load data to a specific area in memory",
+	},
+	{
+		.func = cmd_loadjump,
+		.name = "loadjmp",
+		.help = "Load data to a specific area in memory, "
+			"then jump to it",
+	},
 };
 
 int cmd_help(int argc, char **argv)
@@ -420,7 +446,7 @@ int cmd_help(int argc, char **argv)
 		serial_puts(commands[i].name);
 		serial_putc('\t');
 		serial_puts(commands[i].help);
-		serial_puts("\n");
+		serial_putc('\n');
 	}
 	return 0;
 }
@@ -464,7 +490,7 @@ static int loop(void)
 	printf("\n");
 	return shell_run_command(line);
 }
-#endif
+#endif /* ! AUTOMATED */
 
 int main(void)
 {
